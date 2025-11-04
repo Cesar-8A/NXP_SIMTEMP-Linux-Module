@@ -1,0 +1,47 @@
+
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.order
+*.symvers
+
+# temporal build files 
+.tmp_versions/
+modules.order
+Module.symvers
+
+# Build config files
+.config
+.config.old
+
+# Auto generated files
+*.cmd
+.*.cmd
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# C/C++
+*.so
+*.a
+
+# Doc
+docs/_build/
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+dmesg.txt
+
+# Backups
+*~
+*.bak
