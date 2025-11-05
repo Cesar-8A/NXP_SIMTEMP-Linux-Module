@@ -1,20 +1,36 @@
-#ifndef _NXP_SIMTEMP_H
-#define _NXP_SIMTEMP_H
+#ifndef SIMTEMP_H
+#define SIMTEMP_H
 
 #include <linux/types.h>
 
-#define SIMTEMP_DEV_NAME "simtemp"
-#define SIMTEMP_COMPAT "nxp,simtemp"
-#define SIMTEMP_DEFAULT_SAMPLING_MS 1000 // 1s as default 
-#define SIMTEMP_DEFAULT_THRESHOLD_mC 90000 // 90.0 C 
+// Structure for representing the simulated temperature device
+struct simtemp_dev {
+    struct cdev cdev;         // Character device structure
+    int temperature;          // Current temperature value
+    struct class *class;      // Device class for udev
+    struct device *device;    // Device node (/dev/simtemp)
+};
 
-struct simtemp_sample {
-	__u64 timestamp_ns;   
-	__s32 temp_mC;       
-	__u32 flags;          /* bit0=NEW_SAMPLE, bit1=THRESHOLD_CROSSED */
-} __attribute__((packed));
-
-
-struct simtemp_dev;
-
+// For forcing 0666 for device file priviledge (non root)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+    static char *simtemp_devnode(const struct device *dev, umode_t *mode)
+#else
+    static char *simtemp_devnode(struct device *dev, umode_t *mode)
 #endif
+{
+    if (mode)
+        *mode = 0666;  // rw-rw-rw-
+    return NULL;
+}
+
+
+
+//For random temp generating PENDING, PERHAPS ADD A SINUSOIDAL WAVE AND NOISE TO SIMULATE MORE REALISTIC TEMP CHANGE
+/*
+static int temp_random_in_range(int min, int max){
+
+    return 0;
+}
+*/
+
+#endif // SIMTEMP_H
