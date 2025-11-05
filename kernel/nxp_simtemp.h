@@ -32,6 +32,9 @@ struct simtemp_dev {
     struct timer_list timer;
     unsigned int interval_ms;
 
+    // For flags threshold
+    int threshold_lower;
+    bool threshold_flag;
 
 };
 

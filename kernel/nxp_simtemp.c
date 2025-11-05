@@ -16,8 +16,6 @@
 static struct simtemp_dev *simdev;   // Device instance
 static dev_t dev_num;                // Device number? (Pending about adding multiple instances support)
 
-
-
 // Function prototypes (file operations)
 static int simtemp_open(struct inode *inode, struct file *file);
 static int simtemp_release(struct inode *inode, struct file *file);
@@ -28,8 +26,19 @@ static __poll_t simtemp_poll(struct file *file, poll_table *wait);
 // Sysfs attribute handlers
 static ssize_t sampling_ms_show(struct device *dev, struct device_attribute *attr, char *buf);
 static ssize_t sampling_ms_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count);
+
+static ssize_t temperature_show(struct device *dev, struct device_attribute *attr, char *buf);
+
+static ssize_t threshold_lower_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t threshold_lower_store(struct device *dev, struct device_attribute *attr,const char *buf, size_t count);
+
+static ssize_t threshold_flag_show(struct device *dev,struct device_attribute *attr, char *buf);
 // Create sysfs attribute
 static DEVICE_ATTR_RW(sampling_ms);
+static DEVICE_ATTR_RO(temperature);
+static DEVICE_ATTR_RW(threshold_lower);
+static DEVICE_ATTR_RO(threshold_flag);
+
 
 //Function prototypes (utilities)
 static void simtemp_timer_callback(struct timer_list *t); // For periodic reading generation
@@ -134,6 +143,15 @@ static void simtemp_timer_callback(struct timer_list *t)
         dev->head = (dev->head + 1) % SIMTEMP_BUFFER_SIZE;
         dev->count++;
         dev->temperature = new_temp;
+
+        //Compare to threshold
+        if (new_temp <= dev->threshold_lower){
+            dev->threshold_flag = true;
+            pr_info("simtemp: TEMP FLAG ACTIVATED\n");
+        }
+        else
+            dev->threshold_flag = false;
+
         wake_up_interruptible(&dev->read_queue);
     }
 
@@ -150,7 +168,7 @@ static ssize_t sampling_ms_show(struct device *dev,
 }
 
 
-//allow changing sampling_ms value from sysfs and restarts timer
+//allow changing sampling_ms value from sysfs and restarts timer SYSFS ATTRIBUTE HANDLER
 static ssize_t sampling_ms_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
     unsigned long val;
@@ -172,8 +190,37 @@ static ssize_t sampling_ms_store(struct device *dev, struct device_attribute *at
     return count;
 }
 
+//SYSFS ATTRIBUTE HANDLER
+static ssize_t threshold_lower_show(struct device *dev, struct device_attribute *attr, char *buf){
+    return sprintf(buf, "%d\n", simdev->threshold_lower);
+}
 
+//SYSFS ATTRIBUTE HANDLER
+static ssize_t threshold_lower_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count){
+    int val;
+    if (kstrtoint(buf, 10, &val))
+        return -EINVAL;
 
+    mutex_lock(&simdev->lock);
+    simdev->threshold_lower = val;
+    mutex_unlock(&simdev->lock);
+    return count;
+}
+
+//SYSFS ATTRIBUTE HANDLER
+static ssize_t threshold_flag_show(struct device *dev, struct device_attribute *attr, char *buf){
+    return sprintf(buf, "%d\n", simdev->threshold_flag ? 1 : 0);
+}
+
+// read-only temperature SYSFS ATTRIBUTE HANDLER
+static ssize_t temperature_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    int temp;
+    mutex_lock(&simdev->lock);
+    temp = simdev->temperature;           // tomar el valor actual
+    mutex_unlock(&simdev->lock);
+    return sprintf(buf, "%d\n", temp);    // devolver como string
+}
 
 
 // Called when module is loaded (insmod)
@@ -240,6 +287,7 @@ static int __init simtemp_init(void)
 
     simdev->class->devnode = simtemp_devnode; // Force 0666 privilege for device file
 
+
     // Create the device node in /dev/
     simdev->device = device_create(simdev->class, NULL, dev_num, NULL, DEVICE_NAME);
     if (IS_ERR(simdev->device)) {
@@ -260,14 +308,36 @@ static int __init simtemp_init(void)
 
 
 
-    //Create sysfs attribute: /sys/class/simtemp/simtemp/sampling_ms
+    //Create sysfs sampling ms attribute: /sys/class/simtemp/simtemp/sampling_ms
     ret = device_create_file(simdev->device, &dev_attr_sampling_ms);
     if (ret)
         pr_err("simtemp: failed to create sysfs attribute sampling_ms\n");
+    else
+        pr_info("simtemp: sysfs attribute /sys/class/simtemp/simtemp/sampling_ms ready\n");
+
+    //Create sysfs temperature attribute: /sys/class/simtemp/simtemp/sampling_ms
+    ret = device_create_file(simdev->device, &dev_attr_temperature);
+    if (ret)
+        pr_err("simtemp: failed to create sysfs attribute temperature\n");
+    else
+        pr_info("simtemp: sysfs attribute /sys/class/simtemp/simtemp/temperature ready\n");
 
     //Show debug logs
     pr_info("simtemp: sysfs attribute /sys/class/simtemp/simtemp/sampling_ms ready\n");
     pr_info("simtemp: module loaded (major=%d, minor=%d)\n", MAJOR(dev_num), MINOR(dev_num));
+
+    ret = device_create_file(simdev->device, &dev_attr_threshold_lower);
+    if (ret)
+        pr_err("simtemp: failed to create sysfs attribute threshold_lower\n");
+    else
+        pr_info("simtemp: sysfs attribute /sys/class/simtemp/simtemp/threshold_lower ready\n");
+    
+    ret = device_create_file(simdev->device, &dev_attr_threshold_flag);
+    if (ret)
+        pr_err("simtemp: failed to create sysfs attribute threshold_flag\n");
+    else
+        pr_info("simtemp: sysfs attribute /sys/class/simtemp/simtemp/threshold_flag ready\n");
+
 
     return 0; // Success
 }
@@ -276,7 +346,10 @@ static int __init simtemp_init(void)
 static void __exit simtemp_exit(void)
 {
     del_timer_sync(&simdev->timer);              // Erase timer for periodic readings
-    device_remove_file(simdev->device, &dev_attr_sampling_ms); // Erase sysfs attribute
+    device_remove_file(simdev->device, &dev_attr_sampling_ms); // Erase sysfs sampling ms attribute
+    device_remove_file(simdev->device, &dev_attr_temperature); // Erase sysfs temperature attribute
+    device_remove_file(simdev->device, &dev_attr_threshold_flag); // Erase sysfs threshold_flag
+    device_remove_file(simdev->device, &dev_attr_threshold_lower); // Erase sysfs threshold_lower
     device_destroy(simdev->class, dev_num);      // Remove /dev/simtemp
     class_destroy(simdev->class);               // Remove /sys/class/simtemp
     cdev_del(&simdev->cdev);                   // Delete cdev structure
