@@ -2,6 +2,14 @@
 #define SIMTEMP_H
 
 #include <linux/types.h>
+#include <linux/mutex.h>
+#include <linux/wait.h>
+#include <linux/timer.h>
+#include <linux/cdev.h>
+
+
+#define SIMTEMP_BUFFER_SIZE 16   // ring buffer size
+
 
 // Structure for representing the simulated temperature device
 struct simtemp_dev {
@@ -9,6 +17,22 @@ struct simtemp_dev {
     int temperature;          // Current temperature value
     struct class *class;      // Device class for udev
     struct device *device;    // Device node (/dev/simtemp)
+
+    // Ring buffer
+    int buffer[SIMTEMP_BUFFER_SIZE];
+    int head;
+    int tail;
+    int count;
+
+    // for locking buffer reading
+    struct mutex lock;    
+    wait_queue_head_t read_queue;  
+    
+    // Timer for periodic readings simulation
+    struct timer_list timer;
+    unsigned int interval_ms;
+
+
 };
 
 // For forcing 0666 for device file priviledge (non root)
@@ -22,6 +46,7 @@ struct simtemp_dev {
         *mode = 0666;  // rw-rw-rw-
     return NULL;
 }
+
 
 
 
