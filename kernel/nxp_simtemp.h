@@ -27,6 +27,7 @@ struct simtemp_dev {
     // for locking buffer reading
     struct mutex lock;    
     wait_queue_head_t read_queue;  
+    wait_queue_head_t threshold_queue;
     
     // Timer for periodic readings simulation
     struct timer_list timer;
@@ -35,6 +36,7 @@ struct simtemp_dev {
     // For flags threshold
     int threshold_lower;
     bool threshold_flag;
+    bool threshold_event;
 
 };
 

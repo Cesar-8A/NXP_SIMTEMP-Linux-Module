@@ -120,11 +120,17 @@ static __poll_t simtemp_poll(struct file *file, poll_table *wait)
     __poll_t mask = 0;
 
     poll_wait(file, &simdev->read_queue, wait);
+    poll_wait(file, &simdev->threshold_queue, wait);
 
     // Check for data
     mutex_lock(&simdev->lock);
     if (simdev->count > 0)
         mask |= POLLIN | POLLRDNORM;
+    if (simdev->threshold_event){
+        mask |= POLLPRI; // threshold event
+        simdev->threshold_event = false;
+    }
+
     mutex_unlock(&simdev->lock);
 
     return mask;
@@ -134,7 +140,7 @@ static __poll_t simtemp_poll(struct file *file, poll_table *wait)
 static void simtemp_timer_callback(struct timer_list *t)
 {
     struct simtemp_dev *dev = from_timer(dev, t, timer);
-    int new_temp = 2500 + (get_random_u32() % 1001); // 25.00–35.00 °C
+    int new_temp = 2500 + (get_random_u32() % 1001); // 25.00–35.00 C
 
     mutex_lock(&dev->lock);
 
@@ -144,21 +150,30 @@ static void simtemp_timer_callback(struct timer_list *t)
         dev->count++;
         dev->temperature = new_temp;
 
-        //Compare to threshold
-        if (new_temp <= dev->threshold_lower){
-            dev->threshold_flag = true;
-            pr_info("simtemp: TEMP FLAG ACTIVATED\n");
+        //Threshold comparison logic
+        if (new_temp <= dev->threshold_lower) {
+            if (!dev->threshold_flag) {
+                // Event just triggered (transition from safe → below threshold)
+                dev->threshold_flag = true;
+                dev->threshold_event = true;
+                wake_up_interruptible(&dev->threshold_queue); // wake any poll/select waiting
+                pr_info("simtemp: TEMP FLAG ACTIVATED (temp=%d, thr=%d)\n",
+                        new_temp, dev->threshold_lower);
+            }
+        } else {
+            dev->threshold_flag = false; // reset when back above threshold
         }
-        else
-            dev->threshold_flag = false;
 
+        // Notify readers that new data is available
         wake_up_interruptible(&dev->read_queue);
     }
 
     mutex_unlock(&dev->lock);
 
+    // Reschedule timer for next sample
     mod_timer(&dev->timer, jiffies + msecs_to_jiffies(dev->interval_ms));
 }
+
 
 // show current value of sampling_ms SYSFS ATTRIBUTE HANDLER
 static ssize_t sampling_ms_show(struct device *dev,
@@ -176,8 +191,8 @@ static ssize_t sampling_ms_store(struct device *dev, struct device_attribute *at
     if (ret)
         return ret;
 
-    //check range
-    if (val < 10 || val > 10000)
+    //check sampling range
+    if (val < 1 || val > 10000)
         return -EINVAL;
 
     mutex_lock(&simdev->lock);
@@ -238,12 +253,18 @@ static int __init simtemp_init(void)
 
     //Initialize synchronization
     mutex_init(&simdev->lock);                  // Protects access to ring buffer and counters
-    init_waitqueue_head(&simdev->read_queue);   // Waitqueue for blocking reads
+    init_waitqueue_head(&simdev->read_queue);   
+    init_waitqueue_head(&simdev->threshold_queue); 
 
     //Initialize ring buffer indices
     simdev->head = 0;                           // Start of data
     simdev->tail = 0;                           // End of data
     simdev->count = 0;                          // How many samples currently stored
+
+    simdev->threshold_lower = 2700; // default 27.00°C
+    simdev->threshold_flag = false;
+    simdev->threshold_event = false;
+
 
     // Allocate device number (major and minor)
     ret = alloc_chrdev_region(&dev_num, 0, 1, DEVICE_NAME);
@@ -345,6 +366,12 @@ static int __init simtemp_init(void)
 // Function for removing the module
 static void __exit simtemp_exit(void)
 {
+
+    // Wake any waiters so they don't remain blocked after unload
+    wake_up_interruptible_all(&simdev->read_queue);
+    wake_up_interruptible_all(&simdev->threshold_queue);
+    del_timer_sync(&simdev->timer);
+
     del_timer_sync(&simdev->timer);              // Erase timer for periodic readings
     device_remove_file(simdev->device, &dev_attr_sampling_ms); // Erase sysfs sampling ms attribute
     device_remove_file(simdev->device, &dev_attr_temperature); // Erase sysfs temperature attribute
