@@ -72,37 +72,33 @@ static int simtemp_release(struct inode *inode, struct file *file)
 // Called when user reads from device (/dev/simtemp) FILE OPERATION FUNCTION
 static ssize_t simtemp_read(struct file *file, char __user *buf, size_t len, loff_t *offset)
 {
-    int ret;                                     // For copy_to_user return
-    int temp;                                    // Temporary temperature value
-    char temp_str[16];                           // Buffer for text representation
-    size_t count;                                // Number of bytes to copy
-
-    //Check for disponibility
-    if (mutex_lock_interruptible(&simdev->lock))
-        return -ERESTARTSYS;
-
-    //avoid deadlocks
-    while (simdev->count == 0) {
-        mutex_unlock(&simdev->lock);
-
+    int ret;
+    int temp;
+    char temp_str[16];
+    size_t count;
+    
+    // if no data, wait, interruptable
+    if (simdev->count == 0) {
         if (file->f_flags & O_NONBLOCK)
             return -EAGAIN;
 
+        // wait if buffer empty, interruptable 
         if (wait_event_interruptible(simdev->read_queue, simdev->count > 0))
-            return -ERESTARTSYS;
-
-        if (mutex_lock_interruptible(&simdev->lock))
             return -ERESTARTSYS;
     }        
 
-    //Read from buffer
+    // disable Softirqs to acces buffer
+    spin_lock_bh(&simdev->lock); 
+
+    // Read from buffer
     temp = simdev->buffer[simdev->tail];
     simdev->tail = (simdev->tail + 1) % SIMTEMP_BUFFER_SIZE;
     simdev->count--;
-    //Realese resourse 
-    mutex_unlock(&simdev->lock);
+    
+    // Realese resourse 
+    spin_unlock_bh(&simdev->lock); // enable Softirqs
 
-    count = snprintf(temp_str, sizeof(temp_str), "%d\n", temp); // Format as string
+    count = snprintf(temp_str, sizeof(temp_str), "%d\n", temp); 
 
     // Copy temperature string to user space
     ret = copy_to_user(buf, temp_str, count);
@@ -114,35 +110,13 @@ static ssize_t simtemp_read(struct file *file, char __user *buf, size_t len, lof
     return count;
 }
 
-//poll() - for select(), poll(), epoll() FILE OPERATION FUNCTION
-static __poll_t simtemp_poll(struct file *file, poll_table *wait)
-{
-    __poll_t mask = 0;
-
-    poll_wait(file, &simdev->read_queue, wait);
-    poll_wait(file, &simdev->threshold_queue, wait);
-
-    // Check for data
-    mutex_lock(&simdev->lock);
-    if (simdev->count > 0)
-        mask |= POLLIN | POLLRDNORM;
-    if (simdev->threshold_event){
-        mask |= POLLPRI; // threshold event
-        simdev->threshold_event = false;
-    }
-
-    mutex_unlock(&simdev->lock);
-
-    return mask;
-}
-
 // Function that manages ring buffer and periodic data reading
 static void simtemp_timer_callback(struct timer_list *t)
 {
     struct simtemp_dev *dev = from_timer(dev, t, timer);
     int new_temp = 2500 + (get_random_u32() % 1001); // 25.00–35.00 C
 
-    mutex_lock(&dev->lock);
+    spin_lock(&dev->lock);
 
     if (dev->count < SIMTEMP_BUFFER_SIZE) {
         dev->buffer[dev->head] = new_temp;
@@ -168,10 +142,33 @@ static void simtemp_timer_callback(struct timer_list *t)
         wake_up_interruptible(&dev->read_queue);
     }
 
-    mutex_unlock(&dev->lock);
+    spin_unlock(&dev->lock);
 
     // Reschedule timer for next sample
     mod_timer(&dev->timer, jiffies + msecs_to_jiffies(dev->interval_ms));
+}
+
+//poll() - for select(), poll(), epoll() FILE OPERATION FUNCTION
+static __poll_t simtemp_poll(struct file *file, poll_table *wait)
+{
+    __poll_t mask = 0;
+
+    poll_wait(file, &simdev->read_queue, wait);
+    poll_wait(file, &simdev->threshold_queue, wait);
+
+    // Check for data
+    spin_lock_bh(&simdev->lock);
+
+    if (simdev->count > 0)
+        mask |= POLLIN | POLLRDNORM;
+    if (simdev->threshold_event){
+        mask |= POLLPRI; // threshold event
+        simdev->threshold_event = false;
+    }
+
+    spin_unlock_bh(&simdev->lock); // Usar spin_unlock_bh
+
+    return mask;
 }
 
 
@@ -195,10 +192,10 @@ static ssize_t sampling_ms_store(struct device *dev, struct device_attribute *at
     if (val < 1 || val > 10000)
         return -EINVAL;
 
-    mutex_lock(&simdev->lock);
+    spin_lock(&simdev->lock);
     simdev->interval_ms = val; //update range value
     mod_timer(&simdev->timer, jiffies + msecs_to_jiffies(simdev->interval_ms)); //Restast timer
-    mutex_unlock(&simdev->lock);
+    spin_unlock(&simdev->lock);
 
     pr_info("simtemp: sampling interval updated to %lu ms\n", val);
 
@@ -216,9 +213,9 @@ static ssize_t threshold_lower_store(struct device *dev, struct device_attribute
     if (kstrtoint(buf, 10, &val))
         return -EINVAL;
 
-    mutex_lock(&simdev->lock);
+    spin_lock(&simdev->lock);
     simdev->threshold_lower = val;
-    mutex_unlock(&simdev->lock);
+    spin_unlock(&simdev->lock);
     return count;
 }
 
@@ -231,9 +228,9 @@ static ssize_t threshold_flag_show(struct device *dev, struct device_attribute *
 static ssize_t temperature_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
     int temp;
-    mutex_lock(&simdev->lock);
+    spin_lock(&simdev->lock);
     temp = simdev->temperature;           // tomar el valor actual
-    mutex_unlock(&simdev->lock);
+    spin_unlock(&simdev->lock);
     return sprintf(buf, "%d\n", temp);    // devolver como string
 }
 
@@ -252,7 +249,7 @@ static int __init simtemp_init(void)
         return -ENOMEM;
 
     //Initialize synchronization
-    mutex_init(&simdev->lock);                  // Protects access to ring buffer and counters
+    spin_lock_init(&simdev->lock);                  // Protects access to ring buffer and counters
     init_waitqueue_head(&simdev->read_queue);   
     init_waitqueue_head(&simdev->threshold_queue); 
 
@@ -366,24 +363,23 @@ static int __init simtemp_init(void)
 // Function for removing the module
 static void __exit simtemp_exit(void)
 {
+    if (simdev) {
+        // Wake any waiters so they don't remain blocked after unload
+        wake_up_interruptible_all(&simdev->read_queue);
+        wake_up_interruptible_all(&simdev->threshold_queue);
+        del_timer_sync(&simdev->timer);              // Erase timer for periodic readings
+        device_remove_file(simdev->device, &dev_attr_sampling_ms); // Erase sysfs sampling ms attribute
+        device_remove_file(simdev->device, &dev_attr_temperature); // Erase sysfs temperature attribute
+        device_remove_file(simdev->device, &dev_attr_threshold_flag); // Erase sysfs threshold_flag
+        device_remove_file(simdev->device, &dev_attr_threshold_lower); // Erase sysfs threshold_lower
+        device_destroy(simdev->class, dev_num);      // Remove /dev/simtemp
+        class_destroy(simdev->class);               // Remove /sys/class/simtemp
+        cdev_del(&simdev->cdev);                   // Delete cdev structure
+        unregister_chrdev_region(dev_num, 1);        // Free device number
+        kfree(simdev);                               // Free allocated space for buffer
 
-    // Wake any waiters so they don't remain blocked after unload
-    wake_up_interruptible_all(&simdev->read_queue);
-    wake_up_interruptible_all(&simdev->threshold_queue);
-    del_timer_sync(&simdev->timer);
-
-    del_timer_sync(&simdev->timer);              // Erase timer for periodic readings
-    device_remove_file(simdev->device, &dev_attr_sampling_ms); // Erase sysfs sampling ms attribute
-    device_remove_file(simdev->device, &dev_attr_temperature); // Erase sysfs temperature attribute
-    device_remove_file(simdev->device, &dev_attr_threshold_flag); // Erase sysfs threshold_flag
-    device_remove_file(simdev->device, &dev_attr_threshold_lower); // Erase sysfs threshold_lower
-    device_destroy(simdev->class, dev_num);      // Remove /dev/simtemp
-    class_destroy(simdev->class);               // Remove /sys/class/simtemp
-    cdev_del(&simdev->cdev);                   // Delete cdev structure
-    unregister_chrdev_region(dev_num, 1);        // Free device number
-    kfree(simdev);                               // Free allocated space for buffer
-
-    pr_info("simtemp: module unloaded\n");
+        pr_info("simtemp: module unloaded\n");
+    }
 }
 
 

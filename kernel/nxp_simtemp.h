@@ -2,7 +2,8 @@
 #define SIMTEMP_H
 
 #include <linux/types.h>
-#include <linux/mutex.h>
+//#include <linux/mutex.h>
+#include <linux/spinlock.h>
 #include <linux/wait.h>
 #include <linux/timer.h>
 #include <linux/cdev.h>
@@ -25,9 +26,10 @@ struct simtemp_dev {
     int count;
 
     // for locking buffer reading
-    struct mutex lock;    
+    spinlock_t lock;    
     wait_queue_head_t read_queue;  
     wait_queue_head_t threshold_queue;
+
     
     // Timer for periodic readings simulation
     struct timer_list timer;
