@@ -129,7 +129,6 @@ class DeviceWorker(threading.Thread):
 class MainApplication(ttk.Frame):
     """
     Main GUI class, now integrated with the Worker Thread
-    and your Matplotlib graph.
     """
     def __init__(self, master):
         super().__init__(master, padding="10")
@@ -156,22 +155,29 @@ class MainApplication(ttk.Frame):
         self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def create_widgets(self):
-        # --- Visualization Frame (Your code) ---
+        # --- Visualization Frame  ---
         vis_frame = ttk.LabelFrame(self, text="Live Data", padding="10")
         vis_frame.pack(fill="x", expand=False, pady=5) # Don't expand
 
-        # Temperature Label (Your code)
+        # Temperature Label 
         self.temp_var = tk.StringVar(value="--.- °C")
         temp_label = ttk.Label(vis_frame, textvariable=self.temp_var, font=("Helvetica", 24, "bold"), anchor="center")
         temp_label.pack(pady=5, fill="x")
 
-        # Alert Indicator (Your code)
-        self.alert_canvas = tk.Canvas(vis_frame, width=100, height=50)
-        self.alert_canvas.pack()
-        self.alert_indicator = self.alert_canvas.create_oval(10, 10, 60, 50, fill="grey")
-        self.alert_canvas.create_text(80, 20, text="Alert", anchor="w")
+        # Alert Indicator 
+        alert_frame = ttk.Frame(vis_frame)
+        alert_frame.pack(pady=5)
+        alert_label = ttk.Label(alert_frame, text="Alert:", font=("Helvetica", 10))
+        alert_label.pack(side="left", padx=5)
+        self.alert_canvas = tk.Canvas(alert_frame, width=30, height=30)
+        self.alert_canvas.pack(side="left")
+        self.alert_indicator = self.alert_canvas.create_oval(
+            5, 5, 25, 25, 
+            fill="grey", 
+            outline="black"
+        )
 
-        # --- Matplotlib Graph (Your code, with improvements) ---
+        # --- Matplotlib Graph (with improvements) ---
         graph_frame = ttk.Frame(self) # Frame for the graph
         graph_frame.pack(fill="both", expand=True, pady=10) # Expand
 
@@ -208,8 +214,19 @@ class MainApplication(ttk.Frame):
         self.thresh_var = tk.StringVar()
         ttk.Entry(config_frame, textvariable=self.thresh_var).grid(row=1, column=1, sticky="ew", padx=5)
 
+        #widget for IOCTL options
+        ttk.Label(config_frame, text="Mode:").grid(row=2, column=0, sticky="w", pady=5)
+        self.mode_var = tk.StringVar()
+        self.mode_combo = ttk.Combobox(
+            config_frame,
+            textvariable=self.mode_var,
+            values=['normal', 'noisy', 'ramp'], # Temp options
+            state='readonly' # DO not let user write
+        )
+        
+        self.mode_combo.grid(row=2, column=1, sticky="ew", padx=5)
         apply_button = ttk.Button(config_frame, text="Apply Config", command=self.apply_config)
-        apply_button.grid(row=2, column=0, columnspan=2, pady=10)
+        apply_button.grid(row=3, column=0, columnspan=2, pady=10)
 
         # --- Status Bar (from final code) ---
         self.status_var = tk.StringVar(value="Connecting to driver...")
@@ -232,6 +249,13 @@ class MainApplication(ttk.Frame):
             self.current_threshold = int(threshold_mc) / 1000.0
             self.threshold_line.set_ydata([self.current_threshold])
             self.canvas.draw()
+
+            #get current mode from sysfs
+            mode_str = sysfs_read("mode")
+            if mode_str in ['normal', 'noisy', 'ramp']:
+                self.mode_var.set(mode_str)
+            else:
+                self.mode_var.set('normal') # Default si es un valor extraño            
             
             self.status_var.set("Connected. Reading data...")
         except Exception as e:
@@ -243,6 +267,7 @@ class MainApplication(ttk.Frame):
         try:
             ms = self.sampling_var.get()
             mc_str = self.thresh_var.get()
+            mode = self.mode_var.get()
             
             # Validate before writing
             if not (ms.isdigit() and int(ms) > 0):
@@ -253,6 +278,7 @@ class MainApplication(ttk.Frame):
             # Write to sysfs
             sysfs_write("sampling_ms", ms)
             sysfs_write("threshold_mC", mc_str)
+            sysfs_write("mode", mode)
             
             # Update the graph with the new threshold
             self.current_threshold = int(mc_str) / 1000.0
