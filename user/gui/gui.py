@@ -10,11 +10,6 @@ import time
 import random
 import sys
 from pathlib import Path
-import matplotlib
-matplotlib.use("TkAgg")  # Use Tkinter backend
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-
 
 
 #try to get thye configutarion on CLI, if not possible, use other as default
@@ -37,9 +32,11 @@ except ImportError as e:
     SIMTEMP_FLAG_THRESHOLD_CROSSED = (1 << 1)
 
 # --- GUI Constants ---
-TEMP_MIN_GRAPH = 15  # Graph lower limit
-TEMP_MAX_GRAPH = 45  # Graph upper limit
-MAX_SAMPLES = 50     # Number of samples in the graph
+GRAPH_PAD_X_LEFT = 40
+GRAPH_PAD_X_RIGHT = 10
+GRAPH_PAD_Y_TOP = 10
+GRAPH_PAD_Y_BOTTOM = 20
+MAX_SAMPLES = 50
 
 # --- Helper Functions  ---
 def sysfs_write(attr, value):
@@ -140,6 +137,10 @@ class MainApplication(ttk.Frame):
         self.data_queue = queue.Queue()
         self.samples = [] # Data storage for the graph
         self.current_threshold = 27.0 # Default value, will be loaded from sysfs
+        
+        # For Tkinter graph canvas size
+        self.y_min_graph = 20.0
+        self.y_max_graph = 40.0
 
         # Create Widgets (Mix of both) 
         self.create_widgets()
@@ -177,31 +178,16 @@ class MainApplication(ttk.Frame):
             outline="black"
         )
 
-        # --- Matplotlib Graph (with improvements) ---
-        graph_frame = ttk.Frame(self) # Frame for the graph
-        graph_frame.pack(fill="both", expand=True, pady=10) # Expand
+        # --- TKINTER CANVAS FOR PLOT ---
+        graph_frame = ttk.LabelFrame(self, text="Live Graph (Lightweight Canvas)", padding="5")
+        graph_frame.pack(fill="both", expand=True, pady=10)
 
-        self.fig = Figure(figsize=(5,3), dpi=100)
-        self.ax = self.fig.add_subplot(111)
-        self.ax.set_title("Last 50 Temperature Samples")
-        self.ax.set_xlabel("Sample")
-        self.ax.set_ylabel("Temperature (°C)")
-        self.ax.set_ylim(TEMP_MIN_GRAPH, TEMP_MAX_GRAPH) # Use fixed limits
-        self.ax.grid(True, linestyle='--', alpha=0.5)
-        
-        # Data line
-        self.line, = self.ax.plot([], [], 'b-o', lw=2, markersize=4) 
-        
-        # Threshold Line (now a class attribute)
-        self.threshold_line = self.ax.axhline(
-            self.current_threshold, color='red', linestyle='--', lw=2, label='Threshold'
-        )
-        self.ax.legend(loc="upper left")
+        self.graph_canvas = tk.Canvas(graph_frame, bg="white", highlightthickness=0)
+        # Bind redraw event
+        self.graph_canvas.bind("<Configure>", self.on_canvas_resize)
+        self.graph_canvas.pack(fill="both", expand=True)
 
-        self.canvas = FigureCanvasTkAgg(self.fig, master=graph_frame)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-
-        # --- Configuration Frame (from final code) ---
+        # --- Configuration Frame ---
         config_frame = ttk.LabelFrame(self, text="Controls (sudo required)", padding="10")
         config_frame.pack(fill="x", expand=False, pady=5) # Don't expand
         config_frame.columnconfigure(1, weight=1) # The Entry expands
@@ -245,11 +231,6 @@ class MainApplication(ttk.Frame):
             self.sampling_var.set(sampling)
             self.thresh_var.set(threshold_mc)
             
-            # Update the graph's threshold line
-            self.current_threshold = int(threshold_mc) / 1000.0
-            self.threshold_line.set_ydata([self.current_threshold])
-            self.canvas.draw()
-
             #get current mode from sysfs
             mode_str = sysfs_read("mode")
             if mode_str in ['normal', 'noisy', 'ramp']:
@@ -268,7 +249,8 @@ class MainApplication(ttk.Frame):
             ms = self.sampling_var.get()
             mc_str = self.thresh_var.get()
             mode = self.mode_var.get()
-            
+
+
             # Validate before writing
             if not (ms.isdigit() and int(ms) > 0):
                 raise ValueError("Sampling (ms) must be a number > 0")
@@ -281,9 +263,8 @@ class MainApplication(ttk.Frame):
             sysfs_write("mode", mode)
             
             # Update the graph with the new threshold
-            self.current_threshold = int(mc_str) / 1000.0
-            self.threshold_line.set_ydata([self.current_threshold])
-            self.canvas.draw() # Redraw
+            self.current_threshold =float(mc_str)/1000.0
+            self.redraw_canvas() # Redraw
             
             self.status_var.set(f"Config updated: {ms}ms, {mc_str}mC")
 
@@ -291,6 +272,77 @@ class MainApplication(ttk.Frame):
             self.status_var.set("Error applying config.")
             messagebox.showerror("Sysfs Error", str(e))
     
+    # ----- TKINTER function draw ------- #
+    def _map_x(self, i):
+        #Map coordinates 0-49 (for samples) to axe X
+        canvas_w = self.graph_canvas.winfo_width()
+        plot_w = canvas_w - GRAPH_PAD_X_LEFT - GRAPH_PAD_X_RIGHT
+        if MAX_SAMPLES <= 1: return GRAPH_PAD_X_LEFT
+        return GRAPH_PAD_X_LEFT + (i / (MAX_SAMPLES - 1)) * plot_w
+
+    def _map_y(self, temp):
+        #Map Y value to a temperature value
+        canvas_h = self.graph_canvas.winfo_height()
+        plot_h = canvas_h - GRAPH_PAD_Y_TOP - GRAPH_PAD_Y_BOTTOM
+        temp_range = (self.y_max_graph - self.y_min_graph)
+        if temp_range == 0: return canvas_h - GRAPH_PAD_Y_BOTTOM
+        
+        percent = (temp - self.y_min_graph) / temp_range
+        # Invert Y axe (0 on top)
+        return (canvas_h - GRAPH_PAD_Y_BOTTOM) - (percent * plot_h)
+
+    def on_canvas_resize(self, event):
+        self.redraw_canvas()
+
+    def redraw_canvas(self):
+        # Clean and redraw canvas
+        self.graph_canvas.delete("all")
+        
+        canvas_w = self.graph_canvas.winfo_width()
+        canvas_h = self.graph_canvas.winfo_height()
+
+        # Adjust Axe Y
+        all_points = self.samples + [self.current_threshold]
+        if all_points:
+            self.y_min_graph = min(all_points) - 2
+            self.y_max_graph = max(all_points) + 2
+        
+        # Draw Axis and labels
+        self.graph_canvas.create_line(
+            GRAPH_PAD_X_LEFT, canvas_h - GRAPH_PAD_Y_BOTTOM, 
+            canvas_w - GRAPH_PAD_X_RIGHT, canvas_h - GRAPH_PAD_Y_BOTTOM, 
+            fill="grey"
+        )
+        self.graph_canvas.create_text(GRAPH_PAD_X_LEFT + 10, 10, text="Temp (°C)", anchor="w", fill="grey")
+        self.graph_canvas.create_text(canvas_w - GRAPH_PAD_X_RIGHT, canvas_h - GRAPH_PAD_Y_BOTTOM + 10, text="Samples (50)", anchor="e", fill="grey")
+        
+        # Y axe labels
+        self.graph_canvas.create_text(GRAPH_PAD_X_LEFT - 5, self._map_y(self.y_min_graph), text=f"{self.y_min_graph:.0f}", anchor="e")
+        self.graph_canvas.create_text(GRAPH_PAD_X_LEFT - 5, self._map_y(self.y_max_graph), text=f"{self.y_max_graph:.0f}", anchor="e")
+
+        # Draw threshold lines
+        thresh_y = self._map_y(self.current_threshold)
+        self.graph_canvas.create_line(
+            GRAPH_PAD_X_LEFT, thresh_y, canvas_w - GRAPH_PAD_X_RIGHT, thresh_y, 
+            fill="red", dash=(4, 2), width=2
+        )
+        self.graph_canvas.create_text(GRAPH_PAD_X_LEFT + 10, thresh_y - 7, text=f"{self.current_threshold:.1f}C", fill="red", anchor="w")
+
+        # Draw data line
+        if len(self.samples) < 2:
+            return # if samples are not enough, dont draw
+
+        coords = []
+        for i, temp in enumerate(self.samples):
+            x = self._map_x(i)
+            y = self._map_y(temp)
+            coords.extend([x, y])
+        
+        self.graph_canvas.create_line(coords, fill="blue", width=2)
+
+
+
+
     def poll_queue(self):
         """
         Checks the queue for messages from the worker thread.
@@ -342,17 +394,10 @@ class MainApplication(ttk.Frame):
         if len(self.samples) > MAX_SAMPLES:
             self.samples.pop(0)
 
-        # Redraw the graph
-        self.line.set_data(range(len(self.samples)), self.samples)
+        #update canvas
+        self.redraw_canvas()
         
-        # Dynamically adjust Y-axis 
-        min_y = min(min(self.samples or [0]), self.current_threshold) - 5
-        max_y = max(max(self.samples or [0]), self.current_threshold) + 5
-        self.ax.set_ylim(min_y, max_y)
-        self.ax.set_xlim(0, MAX_SAMPLES-1) # Keep the X-axis fixed
-        self.canvas.draw()
-        
-        # 5. Update status bar
+        # Update status bar
         self.status_var.set(f"Last read: {temp_c:.3f}°C")
 
 

@@ -1,7 +1,17 @@
-simtemp0: simtemp@0 {
-    compatible = nxp,simtemp";
-    sampling-ms = <100>;
-    threshold-mC = <45000>;
-    status = "okay";
+/dts-v1/;
+/plugin/;
+/{//Root node
+    compatible = "brcm,bcm2835"; //raspberry pi
+    fragment@0 {
+        target = <&soc>;
+        
+    __overlay__ {
+            simtemp0: simtemp@0 {
+                compatible = "nxp,simtemp";
+                sampling-ms = <100>;
+                threshold-mC = <30000>;
+                status = "okay";
+            };
+        };
+    };
 };
-
