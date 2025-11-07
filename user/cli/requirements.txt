@@ -1,4 +1,6 @@
 # REQUIRES tk=8.6.14 (INSTALL VIA APT)
+
+#The following are the exact libraries that were used on testing, but they are not really necessary, just tkinter module is
 appdirs==1.4.4
 attrs==23.2.0
 beautifulsoup4==4.12.3
