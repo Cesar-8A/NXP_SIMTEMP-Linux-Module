@@ -7,20 +7,34 @@
 #include <linux/wait.h>
 #include <linux/timer.h>
 #include <linux/cdev.h>
-
+#include <linux/ktime.h>
+#include "nxp_simtemp_ioctl.h"
 
 #define SIMTEMP_BUFFER_SIZE 16   // ring buffer size
 
+//Simulation modes as required by the challenge
+enum simtemp_mode {
+    SIMTEMP_MODE_NORMAL, // e.g., 25-35 C
+    SIMTEMP_MODE_NOISY,  // e.g., 20-40 C
+    SIMTEMP_MODE_RAMP,   // e.g., ramp up
+};
+
+// Statistics structure as required by the challenge
+struct simtemp_stats {
+    __u64 samples_generated;
+    __u64 alerts_triggered;
+    __u64 read_errors;
+};
 
 // Structure for representing the simulated temperature device
 struct simtemp_dev {
     struct cdev cdev;         // Character device structure
-    int temperature;          // Current temperature value
     struct class *class;      // Device class for udev
     struct device *device;    // Device node (/dev/simtemp)
+    dev_t dev_num;
 
     // Ring buffer
-    int buffer[SIMTEMP_BUFFER_SIZE];
+    struct simtemp_sample buffer[SIMTEMP_BUFFER_SIZE];
     int head;
     int tail;
     int count;
@@ -36,9 +50,13 @@ struct simtemp_dev {
     unsigned int interval_ms;
 
     // For flags threshold
-    int threshold_lower;
+    int threshold_mC;
     bool threshold_flag;
     bool threshold_event;
+
+    //fields required by the challenge
+    enum simtemp_mode mode;     // Current simulation mode
+    struct simtemp_stats stats; // Statistics counters
 
 };
 

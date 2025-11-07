@@ -1,1 +1,22 @@
-Pending: How to add platform device to device tree???
+/*
+ * This file defines the "virtual hardware" device that
+ * our platform driver will bind to.
+ */
+
+/ {
+    // This will apply to root node
+    fragment@0 {
+        target-path = "/"; //Apply to root node
+        __overlay__ {
+            
+            // Aquí definimos nuestro dispositivo
+            simtemp0: simtemp@0 {
+                compatible = "nxp,simtemp";
+                status = "okay";
+                // Property values from simtemp_probe()
+                sampling-ms = <100>; // 100 ms
+                threshold-mC = <30000>; // 30.0 C
+            };
+        };
+    };
+};
