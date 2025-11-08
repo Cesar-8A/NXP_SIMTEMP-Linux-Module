@@ -8,7 +8,7 @@ This repository contains my solution to the "NXP Systems Software Engineer Candi
 ## **Submission Links (For Reviewer)**
 
 * **Git Repository:** https://github.com/Cesar-8A/NXP_SIMTEMP-Linux-Module
-* **Video Demo (2-3 min):** 
+* **Video Demo (2-3 min):**  https://youtu.be/i4fwHOYfBl0 
 
 ## **1. Implemented Features**
 
