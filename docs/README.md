@@ -7,7 +7,7 @@ This repository contains my solution to the "NXP Systems Software Engineer Candi
 
 ## **Submission Links (For Reviewer)**
 
-* **Git Repository:**
+* **Git Repository:** https://github.com/Cesar-8A/NXP_SIMTEMP-Linux-Module
 * **Video Demo (2-3 min):** 
 
 ## **1. Implemented Features**
@@ -81,12 +81,12 @@ This will compile kernel/nxp_simtemp.ko, the module can be inserted now
 
 ## **5 How to Test (Start Here!)**
 
-We provide three ways to test the driver, from simplest to most advanced.
+There are three ways to test the driver, from simplest to most advanced.
 
-###### **A. Acceptance Test** ----------------
+### **A. Acceptance Test**
 
 This script automates the build, load, test  
-# Run as root (required for insmod/rmmod and sysfs)
+#### Run as root (required for insmod/rmmod and sysfs)
 sudo ./scripts/run_demo.sh
 
 ### **B. Manual GUI Test (Recommended for Demo)**
@@ -112,7 +112,7 @@ sudo python3 user/gui/gui.py (or CLI if preferred)
 **To Clean Up (in Terminal 1):**
 sudo rmmod nxp_simtemp
 
-###### **C. Stretch Goal Test (Production Mode - Device Tree)** ----------------
+### **C. Stretch Goal Test (Production Mode - Device Tree)**
 
 This test verifies the driver works in an embedded (ARM) environment and binds to the Device Tree.
 
@@ -134,5 +134,5 @@ To test driver on DT Binding nxp-simtemp.dtsi some extra steps must be done:
 ## **6. Additional Documentation**
 
 * **docs/DESIGN.md:** Explains the architecture, block diagram, locking choices (spinlock vs. spin_lock_bh), and API tradeoffs (sysfs vs. ioctl).
-* **docs/TESTPLAN.md:** Details test plan
+* **docs/TESTPLAN.md:** Details test plan and progress.
 * **docs/AI_NOTES.md:** Details how AI was used for code review, debugging, and documentation.
